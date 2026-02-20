@@ -1,0 +1,248 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+  WAITER
+  STOCK
+}
+
+enum TabKind {
+  TABLE
+  BAR
+  DELIVERY
+}
+
+enum TabStatus {
+  OPEN
+  BILLING
+  PAID
+  CANCELED
+}
+
+enum PaymentMethod {
+  PIX
+  CREDIT
+  DEBIT
+  CASH
+  VOUCHER
+  FIADO
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  LOSS
+  ADJUST
+}
+
+enum AccountType {
+  REVENUE
+  EXPENSE
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  openedTabs       Tab[]           @relation("OpenedTabs")
+  closedTabs       Tab[]           @relation("ClosedTabs")
+  addedItems       TabItem[]       @relation("AddedItems")
+  canceledItems    TabItem[]       @relation("CanceledItems")
+  receivedPayments Payment[]       @relation("ReceivedPayments")
+  stockMovements   StockMovement[]
+  ledgerEntries    LedgerEntry[]
+  cashCloses       CashClose[]
+  createdAuditLogs AuditLog[]
+  updatedSettings  Settings[]      @relation("UpdatedSettings")
+}
+
+model Settings {
+  id                       Int      @id @default(1)
+  allowAddItemsWhenBilling Boolean  @default(true)
+  defaultServiceFeePercent Decimal  @default(10) @db.Decimal(5, 2)
+  enableStockModule        Boolean  @default(true)
+  enableCustomerFields     Boolean  @default(false)
+  updatedById              String?
+  updatedAt                DateTime @updatedAt
+
+  updatedBy User? @relation("UpdatedSettings", fields: [updatedById], references: [id])
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  category      String
+  price         Decimal  @db.Decimal(10, 2)
+  cost          Decimal? @db.Decimal(10, 2)
+  controlsStock Boolean  @default(false)
+  active        Boolean  @default(true)
+  minStock      Decimal? @db.Decimal(10, 3)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tabItems       TabItem[]
+  stockMovements StockMovement[]
+}
+
+model Tab {
+  id                String    @id @default(cuid())
+  code              String    @unique
+  kind              TabKind
+  tableNumber       Int?
+  customerName      String?
+  status            TabStatus @default(OPEN)
+  discount          Decimal   @default(0) @db.Decimal(10, 2)
+  serviceFeePercent Decimal   @default(10) @db.Decimal(5, 2)
+  openedById        String
+  openedAt          DateTime  @default(now())
+  closedById        String?
+  closedAt          DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  openedBy       User            @relation("OpenedTabs", fields: [openedById], references: [id])
+  closedBy       User?           @relation("ClosedTabs", fields: [closedById], references: [id])
+  items          TabItem[]
+  payments       Payment[]
+  stockMovements StockMovement[]
+  ledgerEntries  LedgerEntry[]
+
+  @@index([status])
+  @@index([openedAt])
+}
+
+model TabItem {
+  id                String    @id @default(cuid())
+  tabId             String
+  productId         String?
+  nameSnapshot      String
+  unitPriceSnapshot Decimal   @db.Decimal(10, 2)
+  quantity          Decimal   @default(1) @db.Decimal(10, 3)
+  note              String?
+  addedById         String
+  addedAt           DateTime  @default(now())
+  canceledAt        DateTime?
+  canceledById      String?
+  cancelReason      String?
+
+  tab        Tab      @relation(fields: [tabId], references: [id], onDelete: Cascade)
+  product    Product? @relation(fields: [productId], references: [id])
+  addedBy    User     @relation("AddedItems", fields: [addedById], references: [id])
+  canceledBy User?    @relation("CanceledItems", fields: [canceledById], references: [id])
+
+  @@index([tabId])
+}
+
+model Payment {
+  id           String        @id @default(cuid())
+  tabId        String
+  method       PaymentMethod
+  amount       Decimal       @db.Decimal(10, 2)
+  paidAt       DateTime      @default(now())
+  receivedById String
+
+  tab        Tab  @relation(fields: [tabId], references: [id], onDelete: Cascade)
+  receivedBy User @relation("ReceivedPayments", fields: [receivedById], references: [id])
+
+  @@index([tabId])
+  @@index([method])
+}
+
+model StockMovement {
+  id           String            @id @default(cuid())
+  productId    String
+  relatedTabId String?
+  type         StockMovementType
+  quantity     Decimal           @db.Decimal(10, 3)
+  unitCost     Decimal?          @db.Decimal(10, 2)
+  note         String
+  createdById  String
+  createdAt    DateTime          @default(now())
+
+  product    Product @relation(fields: [productId], references: [id])
+  relatedTab Tab?    @relation(fields: [relatedTabId], references: [id])
+  createdBy  User    @relation(fields: [createdById], references: [id])
+
+  @@index([productId])
+  @@index([createdAt])
+}
+
+model AccountCategory {
+  id        String      @id @default(cuid())
+  name      String
+  type      AccountType
+  parentId  String?
+  createdAt DateTime    @default(now())
+
+  parent        AccountCategory?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children      AccountCategory[] @relation("CategoryTree")
+  ledgerEntries LedgerEntry[]
+
+  @@unique([name, type])
+}
+
+model LedgerEntry {
+  id            String         @id @default(cuid())
+  date          DateTime
+  categoryId    String
+  description   String
+  amount        Decimal        @db.Decimal(10, 2)
+  paymentMethod PaymentMethod?
+  relatedTabId  String?
+  createdById   String
+  createdAt     DateTime       @default(now())
+
+  category   AccountCategory @relation(fields: [categoryId], references: [id])
+  relatedTab Tab?            @relation(fields: [relatedTabId], references: [id])
+  createdBy  User            @relation(fields: [createdById], references: [id])
+
+  @@index([date])
+  @@index([paymentMethod])
+}
+
+model CashClose {
+  id              String   @id @default(cuid())
+  date            DateTime
+  shift           String?
+  totalsByMethod  Json
+  countedByMethod Json
+  difference      Decimal  @db.Decimal(10, 2)
+  observation     String?
+  closedById      String
+  closedAt        DateTime @default(now())
+
+  closedBy User @relation(fields: [closedById], references: [id])
+
+  @@index([date])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String
+  action      String
+  entity      String
+  entityId    String?
+  beforeJson  Json?
+  afterJson   Json?
+  createdAt   DateTime @default(now())
+
+  actorUser User @relation(fields: [actorUserId], references: [id])
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+}
